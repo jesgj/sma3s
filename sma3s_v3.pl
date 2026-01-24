@@ -29,6 +29,11 @@ my %PATHS;
 my %KWS;
 my $N = 0; # number of query sequences
 
+# Disk-backed annotation store
+my $ANN_STORE;
+my %ANN_OFF;
+my $ANN_FH;
+
 # Evidence codes
 my @ECO = qw(0000501 0000203 0000209 0000348 0000350 0000347 0000331 0000213 0000246 0000254 0000313 0000259 0000256 0000258 0000210 0000211 0000248 0000265 0000249 0000251 0000261 0000263 0000332);
 my $GOEV = ":IEA";
@@ -353,9 +358,11 @@ my %FREQ;
 my %N_ANNOT;
   
 # Gather reference annotations
-my %ANN; # Annotations for all hits in Blast Report
 open IN, "$REFDB"; # REF annotation file for enrichment
 print "Reading annotations from UniProt reference file\n";
+$ANN_STORE = $ANNOT_FILE . ".annstore";
+open my $ANN_STORE_FH, ">$ANN_STORE" || &error ("Problem creating $ANN_STORE");
+binmode $ANN_STORE_FH;
 while (<IN>) {
   chomp $_;
 
@@ -395,10 +402,17 @@ while (<IN>) {
     $annot .= "\t" . join ";", @term_final;
   }
   $annot =~ s/\t+$//g; # remove tabs in the latter columns
-  $ANN{$id} = $annot if ($id_flag{$id}); # final annotation
+  if ($id_flag{$id}) { # final annotation
+    my $offset = tell($ANN_STORE_FH);
+    print $ANN_STORE_FH "$id\t$annot\n";
+    $ANN_OFF{$id} = $offset;
+  }
 }
 close IN;
+close $ANN_STORE_FH;
 undef %id_flag;
+open $ANN_FH, $ANN_STORE || &error ("Problem opening $ANN_STORE");
+binmode $ANN_FH;
 
 # ANNOTATION
 my @queries;
@@ -433,7 +447,7 @@ QUERY: foreach my $q (@queries) { # Go through the FIRST BLAST
     
     if ($id_hsp >= $ID_UNIPROT && $qc_s >= $COV_UNIPROT && $pv_hsp <= $PV) { # alignment: 90% id + 90% qcoverage + pvalue
       $o1 = ""; # initialize annotation
-      my ($s, $gn1, $de1, @remaining) = split/\t/, $ANN{$name2};
+      my ($s, $gn1, $de1, @remaining) = split/\t/, &get_annot_line($name2);
       (@s1) = split/,/, $s; # scores
       if ($gn1) { ($gn1) = split/;/, $gn1; $o1 .= $gn1; } $o1 .= "\t"; # only first GN
       if ($de1) { ($de1) = split/;/, $de1; $o1 .= $de1; } $o1 .= "\t"; # only first DE
@@ -457,7 +471,7 @@ QUERY: foreach my $q (@queries) { # Go through the FIRST BLAST
       my($name, $name2, $id_hsp, $qc_q, $len_hsp, $evalue)  = split /\t/, $br; # Blast parameters
       
       # Score filter (only evaluating new candidate if higher score than previous
-      my ($s, $gn1, $de1, @remaining) = split/\t/, $ANN{$name2};
+      my ($s, $gn1, $de1, @remaining) = split/\t/, &get_annot_line($name2);
       my (@s3) = split/,/, $s; # scores
       
       next unless $s3[0] == 1 || $s3[1] > $s1[1]; 
@@ -527,9 +541,11 @@ QUERY: foreach my $q (@queries) { # Go through the FIRST BLAST
         my (@ids) = split(/\s/, $cluster);
         my %annot = ();
         foreach my $id (@ids) { # Ids in a cluster
+          my $ann_line = &get_annot_line($id);
+          my @ann_fields = split /\t/, $ann_line;
           for (my $i = 0; $i <= $#TYPES; $i++) { # annotation columns
             my $type = $TYPES[$i];
-            my ($terms) = (split /\t/, $ANN{$id})[$i+1];
+            my $terms = $ann_fields[$i+1];
 
             next unless ($terms); # next if term type is empty
             foreach my $term (split/;/, $terms) {
@@ -789,6 +805,27 @@ sub get_seq() {
     $out =~ s/\//\n/g; # for windows compatibility
     return $out;
   }
+}
+
+# get_annot_line
+# params: ID
+# description: read annotation line from disk-backed store
+#############################################
+sub get_annot_line() {
+  my ($id) = @_;
+
+  return if (!$id);
+  return if (!defined $ANN_FH);
+  my $offset = $ANN_OFF{$id};
+  return if (!defined $offset);
+
+  seek $ANN_FH, $offset, 0;
+  my $line = <$ANN_FH>;
+  return if (!$line);
+  chomp $line;
+  my ($line_id, $annot) = split /\t/, $line, 2;
+
+  return $annot;
 }
 
 # run_blastclust
