@@ -284,11 +284,16 @@ if (! -e $BLAST_FILE) {
   my $null = `$BLAST1 -query $QUERY_FILE $params`;
 }
 
-# Gather Blast, including a flag to free RAM from annots 
+# Filter Blast once, keep v2 rules, and detect query grouping
 my @id_s; # for makeblastcmd
 my %br; # blast reports
 my $id_old = ""; # for not repeating subjects
+my $blast_grouped = 1;
+my %seen_query;
+my $current_query = "";
+my $BLAST_FILE_FILTERED = $BLAST_FILE . ".filtered";
 open BLAST, $BLAST_FILE;
+open BLASTF, ">$BLAST_FILE_FILTERED" || &error ("Problem creating $BLAST_FILE_FILTERED");
 while (<BLAST>) {
   chomp;
   
@@ -296,11 +301,33 @@ while (<BLAST>) {
   my $id3 = "$id$id2";
   
   next if (($TRAINING && $MAPID{$id} eq $id2) || $id3 eq $id_old); # itself is avoided for training & also repeated subject for the same query
+
+  if ($current_query eq "") {
+    $current_query = $id;
+    $seen_query{$id} = 1;
+  } elsif ($id ne $current_query) {
+    $blast_grouped = 0 if ($seen_query{$id});
+    $seen_query{$id} = 1;
+    $current_query = $id;
+  }
+
+  my $line = "$id\t$id2\t" . join "\t", @line;
+  print BLASTF "$line\n";
   push @id_s, $id2 if (!$id_flag{$id2});
   $id_flag{$id2} = 1;
+  $id_old = $id3;
+}
+close BLAST;
+close BLASTF;
+
+# Load filtered Blast into memory (streaming when grouped is handled in later steps)
+open BLAST, $BLAST_FILE_FILTERED;
+while (<BLAST>) {
+  chomp;
+  
+  my ($id, $id2, @line) = split /\t/;
   my $line = "$id\t$id2\t" . join "\t", @line;
   push @{$br{$id}}, $line;
-  $id_old = $id3;
 }
 close BLAST;
 
