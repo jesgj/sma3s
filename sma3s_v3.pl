@@ -224,12 +224,13 @@ print FILE "\n";
 
 # Create filtered Query FASTA
 my $nucl; # for checking if query are nucleotide sequences and 'nucl' was not selected
-my @id_q; # for makeblastcmd
+my %lenq;
 my %MAPID; # Mapping original ID versus sXX
 my $QUERY_FILEo = $QUERY_FILE; # Original query FASTA
 $QUERY_FILE .= 2;
 open QUERYo, $QUERY_FILEo || &error ("Problem opening $QUERY_FILEo");
 open QUERY, ">$QUERY_FILE" || &error ("Problem creating $QUERY_FILE");
+my $current_id = "";
 while (<QUERYo>) {
   chomp;
 
@@ -238,7 +239,8 @@ while (<QUERYo>) {
     my $id = "s$N";
     print QUERY ">$id\n";
     $MAPID{$id} = $1;
-    push @id_q, $id;
+    $current_id = $id;
+    $lenq{$id} = 0;
   } else {
     if ($N <= 5 && $BLAST1 ne "blastx") { # check if queries are nucleotide sequences and 'nucl' was not selected
       if ($N == 5 && $nucl =~ /^[ACGTUN]+$/i) {
@@ -246,6 +248,11 @@ while (<QUERYo>) {
         &error ("First 4 queries seems to be nucleotide sequences, but 'nucl' argument was not selected");
       }
       $nucl .= $_;
+    }
+    if ($current_id) {
+      my $seq_line = $_;
+      $seq_line =~ s/\s+//g;
+      $lenq{$current_id} += length($seq_line);
     }
     print QUERY "$_\n";
   }
@@ -336,21 +343,14 @@ while (<BLAST>) {
 }
 close BLAST;
 
-# Gather lengths for query and hit sequences
-my %lenq;
+# Gather lengths for hit sequences
 my %lens;
 print "Making initial calculations\n";
-my $lengths_q = &get_seq($QUERY_FILE, \@id_q, "len");
 my $lengths_s = &get_seq($FASTA_FILE, \@id_s, "len");
-my (@lengths_q) = split/\n/, $lengths_q;
 my (@lengths_s) = split/\n/, $lengths_s;
-for (my $x = 0; $x <= $#id_q; $x++) {
-  $lenq{$id_q[$x]} = $lengths_q[$x];
-}
 for (my $x = 0; $x <= $#id_s; $x++) {
   $lens{$id_s[$x]} = $lengths_s[$x];
 }
-undef @id_q; undef @lengths_q; undef $lengths_q;
 undef @id_s; undef @lengths_s; undef $lengths_s;
 
 # Biological enrichment for annotator 3
