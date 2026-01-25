@@ -29,6 +29,12 @@ my %PATHS;
 my %KWS;
 my $N = 0; # number of query sequences
 
+# Temp file tracking for cleanup
+my @TEMP_FILES;
+my %TEMP_SEEN;
+
+END { &cleanup_temp_files; }
+
 # Disk-backed annotation store
 my $ANN_STORE;
 my %ANN_OFF;
@@ -303,7 +309,7 @@ my $id_old = ""; # for not repeating subjects
 my $blast_grouped = 1;
 my %seen_query;
 my $current_query = "";
-my $BLAST_FILE_FILTERED = $BLAST_FILE . ".filtered";
+my $BLAST_FILE_FILTERED = &register_temp($BLAST_FILE . ".filtered.tmp");
 open BLAST, $BLAST_FILE;
 open BLASTF, ">$BLAST_FILE_FILTERED" || &error ("Problem creating $BLAST_FILE_FILTERED");
 while (<BLAST>) {
@@ -367,7 +373,7 @@ my %N_ANNOT;
 # Gather reference annotations
 open IN, "$REFDB"; # REF annotation file for enrichment
 print "Reading annotations from UniProt reference file\n";
-$ANN_STORE = $ANNOT_FILE . ".annstore";
+$ANN_STORE = &register_temp($ANNOT_FILE . ".annstore.tmp");
 open my $ANN_STORE_FH, ">$ANN_STORE" || &error ("Problem creating $ANN_STORE");
 binmode $ANN_STORE_FH;
 while (<IN>) {
@@ -524,6 +530,31 @@ exit;
 # SUBRUTINES #
 ##############
 
+# register_temp
+# params: temp file path
+# description: track temp files for cleanup
+#############################################
+sub register_temp () {
+  my ($path) = @_;
+
+  return if (!$path);
+  if (!$TEMP_SEEN{$path}) {
+    $TEMP_SEEN{$path} = 1;
+    push @TEMP_FILES, $path;
+  }
+  return $path;
+}
+
+# cleanup_temp_files
+# description: remove temp files created during execution
+#############################################
+sub cleanup_temp_files () {
+  foreach my $path (@TEMP_FILES) {
+    unlink $path if ($path && -e $path);
+  }
+  return;
+}
+
 # annotate_query
 # params: query_id, blast_lines_ref, lens_ref
 # description: run annotators for a single query
@@ -587,7 +618,7 @@ sub annotate_query () {
         
         # Run SECOND BLAST
         my $fasta2 = &get_seq($FASTA_FILE, $name2, "seq");
-        my $temp_f = "./.temp_$name2\_" . rand(1000000);
+        my $temp_f = &register_temp("./.sma3s_tmp_$name2\_" . int(rand(1000000)) . ".fasta");
         open TEMP, ">$temp_f" || &error ("Problem creating files in this folder");
         print TEMP ">$name2\n$fasta2";
         close TEMP;
@@ -844,7 +875,7 @@ sub get_seq() {
   if ($format eq "seq") {
     return `blastdbcmd -db $db -entry $ids -outfmt \"$f{$format}\"`;
   } else {
-    my $temp = "./.temp" . rand(1000000) . ".ids";
+    my $temp = &register_temp("./.sma3s_tmp_ids_" . int(rand(1000000)) . ".txt");
     open IDS, ">$temp";
     print IDS join "\n", @$ids;
     close IDS;
@@ -888,7 +919,7 @@ sub run_blastclust () {
   my ($fasta, $params, $name) = @_;
   
   # Random temporal file
-  my $temp = "./temp_$name.fas" . rand(1000000);
+  my $temp = &register_temp("./.sma3s_tmp_blastclust_$name" . int(rand(1000000)) . ".fas");
 
   # Create FASTA file
   open (FASTA, ">$temp") || &error ("Problem creating $temp");
