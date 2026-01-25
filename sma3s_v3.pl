@@ -332,26 +332,33 @@ while (<BLAST>) {
 close BLAST;
 close BLASTF;
 
-# Load filtered Blast into memory (streaming when grouped is handled in later steps)
-open BLAST, $BLAST_FILE_FILTERED;
-while (<BLAST>) {
-  chomp;
-  
-  my ($id, $id2, @line) = split /\t/;
-  my $line = "$id\t$id2\t" . join "\t", @line;
-  push @{$br{$id}}, $line;
+# Load filtered Blast into memory (fallback when Blast is not grouped)
+if (!$blast_grouped) {
+  open BLAST, $BLAST_FILE_FILTERED;
+  while (<BLAST>) {
+    chomp;
+    
+    my ($id, $id2, @line) = split /\t/;
+    my $line = "$id\t$id2\t" . join "\t", @line;
+    push @{$br{$id}}, $line;
+  }
+  close BLAST;
+} else {
+  undef %br;
 }
-close BLAST;
 
-# Gather lengths for hit sequences
+# Gather lengths for hit sequences (fallback when Blast is not grouped)
 my %lens;
 print "Making initial calculations\n";
-my $lengths_s = &get_seq($FASTA_FILE, \@id_s, "len");
-my (@lengths_s) = split/\n/, $lengths_s;
-for (my $x = 0; $x <= $#id_s; $x++) {
-  $lens{$id_s[$x]} = $lengths_s[$x];
+if (!$blast_grouped) {
+  my $lengths_s = &get_seq($FASTA_FILE, \@id_s, "len");
+  my (@lengths_s) = split/\n/, $lengths_s;
+  for (my $x = 0; $x <= $#id_s; $x++) {
+    $lens{$id_s[$x]} = $lengths_s[$x];
+  }
+  undef @lengths_s; undef $lengths_s;
 }
-undef @id_s; undef @lengths_s; undef $lengths_s;
+undef @id_s;
 
 # Biological enrichment for annotator 3
 my %FREQ;
@@ -429,21 +436,115 @@ while (<FASTA>) {
 close FASTA;
 
 print "Running Annotator $ANNOTATOR\n";
-QUERY: foreach my $q (@queries) { # Go through the FIRST BLAST
+if (!$blast_grouped) {
+  foreach my $q (@queries) {
+    my $br_ref = $br{$q} || [];
+    &annotate_query($q, $br_ref, \%lens);
+  }
+} else {
+  open BLASTF, $BLAST_FILE_FILTERED;
+  my $pending = <BLASTF>;
+  chomp $pending if defined $pending;
+  foreach my $q (@queries) {
+    my @br_q;
+    my @id_s_q;
+    my %seen_s;
+    while (defined $pending) {
+      my ($id, $id2, @line) = split /\t/, $pending;
+      last if ($id ne $q);
+      push @br_q, $pending;
+      if (!$seen_s{$id2}) {
+        push @id_s_q, $id2;
+        $seen_s{$id2} = 1;
+      }
+      $pending = <BLASTF>;
+      chomp $pending if defined $pending;
+    }
+
+    my %lens_q;
+    if (@id_s_q) {
+      my $lengths_s = &get_seq($FASTA_FILE, \@id_s_q, "len");
+      my (@lengths_s) = split /\n/, $lengths_s;
+      for (my $x = 0; $x <= $#id_s_q; $x++) {
+        $lens_q{$id_s_q[$x]} = $lengths_s[$x];
+      }
+    }
+    &annotate_query($q, \@br_q, \%lens_q);
+  }
+  close BLASTF;
+}
+close FILE;
+
+# Print summary
+(my $STAT_FILE = $ANNOT_FILE) =~ s/\.tsv$/_summary.tsv/;
+open STAT, ">$STAT_FILE";
+print STAT "#Annotation summary\n";
+print STAT "Number of query sequences:\t$N\n";
+foreach my $stat ("Annotations", @TYPES) { # Annotations
+  print STAT "With $stat\t$STATS{$stat}\n" unless $stat eq "GOSLIM";
+}
+foreach my $stat ("a1", "a2", "a3", "a12", "a123") { # Annotator
+  print STAT "Annotator $stat\t$STATS{$stat}\n";
+}
+print STAT "\n";
+if ($GOSLIM) {
+  my %cat = ("P" => "Biological process", "C" => "Cellular component", "F" => "Molecular function");
+  print STAT "#GO Slim\n";
+  foreach my $g (keys %SLIMS) {
+    print STAT "#Category \"$cat{$g}\"\n";
+    foreach my $slim (sort { $SLIMS{$g}{$b} <=> $SLIMS{$g}{$a} } keys %{$SLIMS{$g}}) {
+      my ($name) = (split/:/, $SLIM{$slim})[1];
+      print STAT "$slim\t$name\t$SLIMS{$g}{$slim}\n";
+    }
+    print STAT "\n";
+  }
+}
+print STAT "#UniProt Pathways\n" if %PATHS;
+foreach my $path (sort { $PATHS{$b} <=> $PATHS{$a} } keys %PATHS) { # UniProt Pathways
+  print STAT "$path\t$PATHS{$path}\n";
+}
+print STAT "\n" if %PATHS;
+print STAT "#UniProt Keyword categories\n";
+foreach my $cat (sort keys %KWS) { # UniProt Keyword categories
+  print STAT "#Category \"$cat\"\n";
+  foreach my $kw (sort { $KWS{$cat}{$b} <=> $KWS{$cat}{$a} } keys %{$KWS{$cat}}) {
+    print STAT "$kw\t$KWS{$cat}{$kw}\n";
+  }
+  print STAT "\n";
+}
+close STAT;
+
+# The end
+print "\nAnnotation file created (open with a spreadsheet): $ANNOT_FILE\n";
+print "Summary file created (open with a spreadsheet): $STAT_FILE\n\n";
+print "Please, don't forget citing the paper: http://www.ncbi.nlm.nih.gov/pubmed/24501397\n\n";
+exit;
+
+##############
+# SUBRUTINES #
+##############
+
+# annotate_query
+# params: query_id, blast_lines_ref, lens_ref
+# description: run annotators for a single query
+#############################################
+sub annotate_query () {
+  my ($q, $br_ref, $lens_ref) = @_;
+
   my ($o1, $o2);              # The best output from the 3 annotators
   my @s1 = (0,0); my $s2 = 0; # The best scores from the 3 annotators
-  if (!$br{$q}[0]) {       # hits not found in Blast report
+  if (!$br_ref->[0]) {       # hits not found in Blast report
     print FILE "$MAPID{$q}\n" if (!$NOEMPTY); 
-    next;
+    return;
   }
   
-  my($name, $name2, $id_hsp, $qc_q, $len_hsp, $evalue)  = split /\t/, $br{$q}[0]; # Blast parameters
+  my($name, $name2, $id_hsp, $qc_q, $len_hsp, $evalue)  = split /\t/, $br_ref->[0]; # Blast parameters
   
   # Only ANNOTATOR 1
   ##################
   if ($ANNOTATOR =~ /1/) {
     my $pv_hsp = &pvalue_from_evalue ($evalue);
-    my $qc_s = &calculate_qc_subject ($lenq{$name}, $qc_q, $lens{$name2});
+    my $qc_s = &calculate_qc_subject ($lenq{$name}, $qc_q, $lens_ref->{$name2});
     
     if ($id_hsp >= $ID_UNIPROT && $qc_s >= $COV_UNIPROT && $pv_hsp <= $PV) { # alignment: 90% id + 90% qcoverage + pvalue
       $o1 = ""; # initialize annotation
@@ -455,18 +556,18 @@ QUERY: foreach my $q (@queries) { # Go through the FIRST BLAST
 
       if ($ANNOTATOR == 1) { # only A1 selected
         print FILE &create_annot($MAPID{$name}, $o1, "a1", $name2);
-        next QUERY; 
+        return; 
       }
     } elsif ($ANNOTATOR == 1) {
       print FILE "$MAPID{$name}\n" if (!$NOEMPTY); 
-      next QUERY; 
+      return; 
     }
   }
     
   # Only ANNOTATOR 2
   ##################  
   if ($ANNOTATOR =~ /2/) {
-    foreach my $br (@{$br{$q}}) {
+    foreach my $br (@{$br_ref}) {
       next if $s1[0] == 1 || $s1[1] == $MAX_SCORE; # next if already swiss-prot or maximum gn_de score
       my($name, $name2, $id_hsp, $qc_q, $len_hsp, $evalue)  = split /\t/, $br; # Blast parameters
       
@@ -477,7 +578,7 @@ QUERY: foreach my $q (@queries) { # Go through the FIRST BLAST
       next unless $s3[0] == 1 || $s3[1] > $s1[1]; 
       
       my $pv_hsp = &pvalue_from_evalue ($evalue);
-      my $qc_s = &calculate_qc_subject ($lenq{$name}, $qc_q, $lens{$name2});
+      my $qc_s = &calculate_qc_subject ($lenq{$name}, $qc_q, $lens_ref->{$name2});
     
       # Alignment: % id or rost + qcoverage + pvalue threshold
       my $threshold = $ID_ORTHOLOGUE;
@@ -504,12 +605,12 @@ QUERY: foreach my $q (@queries) { # Go through the FIRST BLAST
           @s1 = @s3;
           if ($ANNOTATOR == 2 || $ANNOTATOR == 12) { # only A2 selected
             print FILE &create_annot($MAPID{$name}, $o1, "a2", $name2);
-            next QUERY; 
+            return; 
           }
         }
       } elsif ($ANNOTATOR == 2 || $ANNOTATOR == 12) {
         print FILE "$MAPID{$name}\n" if (!$NOEMPTY); 
-        next QUERY; 
+        return; 
       }
     }
   }
@@ -518,7 +619,7 @@ QUERY: foreach my $q (@queries) { # Go through the FIRST BLAST
   ######################################
   my @id_fastas = (); # Gather Fastas from Blast report
   if ($ANNOTATOR =~ /3/) {
-    foreach (@{$br{$q}}) {
+    foreach (@{$br_ref}) {
       my ($name, $name2, $id_hsp, $qc_q, $len_hsp, $evalue)  = split /\t/;
       my $threshold = &calculate_rost ($ROST,$len_hsp);
       next unless ($id_hsp > $threshold);
@@ -599,14 +700,14 @@ QUERY: foreach my $q (@queries) { # Go through the FIRST BLAST
     if ($ANNOTATOR == 3) {
       print FILE &create_annot($MAPID{$name}, $o2, "a3", (join ";", @id_fastas)) if ($o2);
       print FILE "$MAPID{$name}\n" if (!$o2 && !$NOEMPTY);
-      next QUERY;
+      return;
     } 
   }
 
   # Final OUTPUT (A123): $o1=A1|A2; $o2=A3
   if (!$o1 && !$o2) { # sequence not annotated
     print FILE "$MAPID{$name}\n" if (!$NOEMPTY);
-    next QUERY;
+    return;
   }
   
   my $o3; # A123
@@ -634,57 +735,8 @@ QUERY: foreach my $q (@queries) { # Go through the FIRST BLAST
     $o3 =~ s/^\t//; # remove first tab (previous to gene_name)
     print FILE &create_annot($MAPID{$name}, $o3, "a123", (join ";", @id_fastas));
   }
+  return;
 }
-close FILE;
-
-# Print summary
-(my $STAT_FILE = $ANNOT_FILE) =~ s/\.tsv$/_summary.tsv/;
-open STAT, ">$STAT_FILE";
-print STAT "#Annotation summary\n";
-print STAT "Number of query sequences:\t$N\n";
-foreach my $stat ("Annotations", @TYPES) { # Annotations
-  print STAT "With $stat\t$STATS{$stat}\n" unless $stat eq "GOSLIM";
-}
-foreach my $stat ("a1", "a2", "a3", "a12", "a123") { # Annotator
-  print STAT "Annotator $stat\t$STATS{$stat}\n";
-}
-print STAT "\n";
-if ($GOSLIM) {
-  my %cat = ("P" => "Biological process", "C" => "Cellular component", "F" => "Molecular function");
-  print STAT "#GO Slim\n";
-  foreach my $g (keys %SLIMS) {
-    print STAT "#Category \"$cat{$g}\"\n";
-    foreach my $slim (sort { $SLIMS{$g}{$b} <=> $SLIMS{$g}{$a} } keys %{$SLIMS{$g}}) {
-      my ($name) = (split/:/, $SLIM{$slim})[1];
-      print STAT "$slim\t$name\t$SLIMS{$g}{$slim}\n";
-    }
-    print STAT "\n";
-  }
-}
-print STAT "#UniProt Pathways\n" if %PATHS;
-foreach my $path (sort { $PATHS{$b} <=> $PATHS{$a} } keys %PATHS) { # UniProt Pathways
-  print STAT "$path\t$PATHS{$path}\n";
-}
-print STAT "\n" if %PATHS;
-print STAT "#UniProt Keyword categories\n";
-foreach my $cat (sort keys %KWS) { # UniProt Keyword categories
-  print STAT "#Category \"$cat\"\n";
-  foreach my $kw (sort { $KWS{$cat}{$b} <=> $KWS{$cat}{$a} } keys %{$KWS{$cat}}) {
-    print STAT "$kw\t$KWS{$cat}{$kw}\n";
-  }
-  print STAT "\n";
-}
-close STAT;
-
-# The end
-print "\nAnnotation file created (open with a spreadsheet): $ANNOT_FILE\n";
-print "Summary file created (open with a spreadsheet): $STAT_FILE\n\n";
-print "Please, don't forget citing the paper: http://www.ncbi.nlm.nih.gov/pubmed/24501397\n\n";
-exit;
-
-##############
-# SUBRUTINES #
-##############
 
 # pvalue_from_evalue
 # params: evalue
