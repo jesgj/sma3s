@@ -6,6 +6,7 @@ Sma3s has low computing requirements and can be used on virtually any computer. 
 To annotate your sequence dataset, you only need the following files:
 - Your query sequences in multi-FASTA format,
 - The reference database, which you can download from our server: http://www.bioinfocabd.upo.es/sma3s/db/
+- For UniRef FASTA databases, keep the matching `.annot` file in the same folder (for example, `uniref90.fasta` + `uniref90.annot`).
 
 ## Linux
 Usual command line for annotating proteomes:
@@ -30,6 +31,7 @@ Open Terminal from Applications/Utilities.
 Alternatively, you can use Sma3s with the whole UniProt database, if you are interested in a more sensitive, though more slowly, annotation. 
 To do that, you must download a .dat file from UniProt:
 - ftp://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/)
+Sma3s will generate the corresponding `.fasta` and `.annot` files from the `.dat` input.
 
 And install the Blast Legacy package:
 - ftp://ftp.ncbi.nlm.nih.gov/blast/executables/legacy/

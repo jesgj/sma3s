@@ -275,6 +275,19 @@ my $bc_params = "-p T -L .95 -b F -S 95";
 # Creating FASTA & ANNOT file
 (my $REFDB = $FASTA_FILE) =~ s/\.fasta/\.annot/; # ANNOT_FILE from .fasta
 if (! -e $FASTA_FILE || ! -e $REFDB) {
+  if (-e $DAT_FILE) {
+    my $first_line;
+    open CHECK, $DAT_FILE || &error ("Problem opening $DAT_FILE");
+    while (<CHECK>) {
+      next if /^\s*$/;
+      $first_line = $_;
+      last;
+    }
+    close CHECK;
+    if (defined $first_line && $first_line =~ /^>/) {
+      &error ("FASTA database provided without companion .annot file ($REFDB). Provide the matching .annot for $FASTA_FILE or a UniProt .dat file");
+    }
+  }
   print "Creating Fasta and Annot from UniProt file\n";
   &createFastaAnnotFromUniprot($DAT_FILE, $FASTA_FILE, $REFDB);
 }
@@ -579,8 +592,12 @@ sub annotate_query () {
     
     if ($id_hsp >= $ID_UNIPROT && $qc_s >= $COV_UNIPROT && $pv_hsp <= $PV) { # alignment: 90% id + 90% qcoverage + pvalue
       $o1 = ""; # initialize annotation
-      my ($s, $gn1, $de1, @remaining) = split/\t/, &get_annot_line($name2);
-      (@s1) = split/,/, $s; # scores
+      my $ann_line = &get_annot_line($name2);
+      my ($s, $gn1, $de1, @remaining);
+      if (defined $ann_line) {
+        ($s, $gn1, $de1, @remaining) = split /\t/, $ann_line;
+        (@s1) = split /,/, ($s // ""); # scores
+      }
       if ($gn1) { ($gn1) = split/;/, $gn1; $o1 .= $gn1; } $o1 .= "\t"; # only first GN
       if ($de1) { ($de1) = split/;/, $de1; $o1 .= $de1; } $o1 .= "\t"; # only first DE
       $o1 .= join "\t" , @remaining; # functional annotation
@@ -603,10 +620,12 @@ sub annotate_query () {
       my($name, $name2, $id_hsp, $qc_q, $len_hsp, $evalue)  = split /\t/, $br; # Blast parameters
       
       # Score filter (only evaluating new candidate if higher score than previous
-      my ($s, $gn1, $de1, @remaining) = split/\t/, &get_annot_line($name2);
-      my (@s3) = split/,/, $s; # scores
+      my $ann_line = &get_annot_line($name2);
+      next unless defined $ann_line;
+      my ($s, $gn1, $de1, @remaining) = split /\t/, $ann_line;
+      my (@s3) = split /,/, ($s // ""); # scores
       
-      next unless $s3[0] == 1 || $s3[1] > $s1[1]; 
+      next unless ($s3[0] // 0) == 1 || ($s3[1] // 0) > $s1[1]; 
       
       my $pv_hsp = &pvalue_from_evalue ($evalue);
       my $qc_s = &calculate_qc_subject ($lenq{$name}, $qc_q, $lens_ref->{$name2});
@@ -674,6 +693,7 @@ sub annotate_query () {
         my %annot = ();
         foreach my $id (@ids) { # Ids in a cluster
           my $ann_line = &get_annot_line($id);
+          next unless defined $ann_line;
           my @ann_fields = split /\t/, $ann_line;
           for (my $i = 0; $i <= $#TYPES; $i++) { # annotation columns
             my $type = $TYPES[$i];
@@ -948,6 +968,18 @@ sub createFastaAnnotFromUniprot () {
   my @STOP_KW = ("3D-structure", "Allosteric enzyme", "Complete proteome", "Genetically modified food", "Hybridoma", "Multifunctional enzyme", 
                  "Pharmaceutical", "ERV", "Direct protein sequencing", "Extinct organism protein", "Proteomics identification", 
                  "Reference proteome", "Alternative initiation", "Alternative splicing", "Polymorphism", "Alternative promoter usage");
+
+  my $first_line;
+  open CHECK, $dat || &error ("Problem opening $dat");
+  while (<CHECK>) {
+    next if /^\s*$/;
+    $first_line = $_;
+    last;
+  }
+  close CHECK;
+  if (defined $first_line && $first_line =~ /^>/) {
+    &error ("FASTA database detected in $dat. Provide a UniProt .dat file or a FASTA database with a matching .annot file");
+  }
 
   unlink glob "$fasta*" if (-e "$fasta.psq" || -e "$fasta.00.psq"); # Remove indexed fasta
 
