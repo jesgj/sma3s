@@ -5,6 +5,7 @@ use strict;
 # Sma3s: a three-step modular sequence annotator for large sequence datasets
 # v2, 2015-06-12: Blast+ & remove Bioperl, and other external libraries (CSanchez); evidence code use;
 # Interpro/Interaction removed; included many performance and accuracy improvements, as well as summary results
+# v3, 2026: RAM optimization for large datasets (jesgj)
 
 # For HyGe library (used for biological enrichment)
 my %LChooseCache;

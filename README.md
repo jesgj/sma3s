@@ -3,6 +3,13 @@
 
 Sma3s has low computing requirements and can be used on virtually any computer. It is written in Perl language and you need its interpreter (http://www.perl.com), which is preinstalled in Linux and Mac OS X (in Windows it will not be necessary). Additionally, you need to install the Blast+ package for your operating system.
 
+This repository uses `sma3s_v3.pl` as the main script. Version 3 is RAM-optimized compared with v2 (streamed BLAST processing and disk-backed annotation lookups). On small datasets, total runtime can be slightly slower due to extra disk I/O; on large or RAM-limited runs, v3 is usually more stable and can be faster overall by avoiding memory pressure.
+
+To clone only branch `v3`:
+```bash
+git clone --branch v3 --single-branch https://github.com/jesgj/sma3s.git
+```
+
 To annotate your sequence dataset, you only need the following files:
 - Your query sequences in multi-FASTA format,
 - The reference database, which you can download from our server: http://www.bioinfocabd.upo.es/sma3s/db/
@@ -10,12 +17,12 @@ To annotate your sequence dataset, you only need the following files:
 
 ## Linux
 Usual command line for annotating proteomes:
-- *./sma3s_v2.pl -i query_dataset.fasta -d uniref90.fasta -goslim*
+- *./sma3s_v3.pl -i query_dataset.fasta -d uniref90.fasta -goslim*
 
 Usual command line for annotating transcriptomes:
-- *./sma3s_v2.pl -i query_dataset.fasta -d uniref90.fasta -nucl -goslim*
+- *./sma3s_v3.pl -i query_dataset.fasta -d uniref90.fasta -nucl -goslim*
 
-Run "sma3s_v2.pl --help" for help with these and other advanced parameters.
+Run "sma3s_v3.pl --help" for help with these and other advanced parameters.
 
 ## Windows
 Install Blast+ for Windows from: ftp://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/
